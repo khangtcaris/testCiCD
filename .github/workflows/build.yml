@@ -15,6 +15,11 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
+      - name: Delay start to batch incoming PRs
+        run: |
+          echo "😴 Waiting 5 minutes so you can create multiple PRs..."
+          sleep 300
+
       - name: Checkout queue branch
         uses: actions/checkout@v4
         with:
@@ -59,6 +64,7 @@ jobs:
           git config user.email "github-actions@github.com"
           git add queue.txt
           git commit -m "Processed PR ${{ github.event.inputs.pr_number }}" || echo "No changes"
+          git pull --rebase origin queue-store
           git push origin queue-store
 
       - name: Check if queue still has items
