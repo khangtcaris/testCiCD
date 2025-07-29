@@ -47,9 +47,9 @@ jobs:
 
           if [ "$EXISTS" -eq 0 ]; then
             echo "✅ Adding PR #$PR_NUM..."
-            TMP=$(mktemp)
-            jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"$TITLE\", \"ref\": \"$REF\"}]" "$FILE" > "$TMP" 2>/dev/null || echo "[]" > "$TMP" && jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"$TITLE\", \"ref\": \"$REF\"}]" "$TMP" > "$TMP"
-            mv "$TMP" "$FILE"
+            jq --arg pr "$PR_NUM" --arg title "$TITLE" --arg ref "$REF" \
+              '. + [{pr: $pr, title: $title, ref: $ref}]' "$FILE" > tmp.json
+            mv tmp.json "$FILE"
           else
             echo "ℹ️ PR #$PR_NUM already in queue, skipping append"
           fi
