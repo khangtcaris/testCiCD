@@ -26,7 +26,7 @@ jobs:
           mkdir -p .github
           FILE=.github/queue.json
           [ -f "$FILE" ] || echo "[]" > $FILE
-          jq ". + [{\"pr\": \"${{ github.event.pull_request.number }}\", \"title\": \"${{ github.event.pull_request.title }}\"}]" $FILE > tmp.json && mv tmp.json $FILE
+          jq ". + [{\"pr\": \"${{ github.event.pull_request.number }}\", \"title\": \"${{ github.event.pull_request.title }}\", \"ref\": \"${{ github.head_ref }}\"}]" $FILE > tmp.json && mv tmp.json $FILE
           cat $FILE
 
       - name: Commit queue update
@@ -44,16 +44,12 @@ jobs:
           echo "RUNNING=$RUNNING" >> $GITHUB_ENV
           echo "Builds running: $RUNNING"
 
-      - name: Trigger build
+      - name: Trigger build via API
         if: env.RUNNING == '0'
-        uses: peter-evans/workflow-dispatch@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          workflow: build.yml
-          ref: ${{ github.head_ref }}
-          inputs: |
-            {
-              "pr_number": "${{ github.event.pull_request.number }}",
-              "title": "${{ github.event.pull_request.title }}"
-            }
+        run: |
+          MSG=$(jq '.[0]' .github/queue.json)
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
+            -d "{\"ref\":\"$(echo $MSG | jq -r .ref)\",\"inputs\":{\"pr_number\":\"$(echo $MSG | jq -r .pr)\",\"title\":\"$(echo $MSG | jq -r .title)\"}}"
