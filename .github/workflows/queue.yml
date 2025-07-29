@@ -33,16 +33,12 @@ jobs:
 
       - name: Add PR metadata if not exists
         run: |
-          FILE=".github/queue.json"
+          FILE="queue.txt"
           PR_NUM="${{ github.event.pull_request.number }}"
           TITLE="${{ github.event.pull_request.title }}"
           REF="${{ github.head_ref }}"
 
-          echo "📂 Content BEFORE update:"
-          cat "$FILE" 2>/dev/null || echo "File does not exist yet"
-
-          mkdir -p "$(dirname "$FILE")"
-          EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE" 2>/dev/null || echo 0)
+          EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE")
           EXISTS=${EXISTS:-0}
 
           if [ "$EXISTS" -eq 0 ]; then
@@ -55,9 +51,9 @@ jobs:
           fi
 
           echo "📂 Content AFTER update:"
-          cat "$FILE" 2>/dev/null || echo "Failed to read file"
+          cat "$FILE"
           echo "📏 File checksum AFTER update:"
-          sha256sum "$FILE" 2>/dev/null || echo "Failed to compute checksum"
+          sha256sum "$FILE"
 
       - name: Commit queue update
         run: |
