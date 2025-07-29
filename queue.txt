@@ -1,2 +1,0 @@
-{"pr":"18","title":"Dev","ref":"dev"}
-{"pr":"20","title":"test","ref":"PR-1"}
