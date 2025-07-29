@@ -51,4 +51,7 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           repository: ${{ github.repository }}
           workflow: build.yml
-          ref: main
+          ref: ${{ github.head_ref }}
+          inputs:
+            pr_number: ${{ github.event.pull_request.number }}
+            title: ${{ github.event.pull_request.title }}
