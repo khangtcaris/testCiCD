@@ -32,7 +32,7 @@ jobs:
         run: |
           MSG='${{ steps.get.outputs.msg }}'
           if [ "$MSG" = "null" ]; then
-            echo "No message found. Exiting."
+            echo "❌ No message found. Exiting."
             exit 1
           fi
           PR=$(echo $MSG | jq -r .pr)
@@ -41,7 +41,7 @@ jobs:
           if [ "$PR" != "${{ github.event.inputs.pr_number }}" ] || \
              [ "$TITLE" != "${{ github.event.inputs.title }}" ] || \
              [ "$REF" != "${{ github.event.inputs.ref }}" ]; then
-            echo "Queue head does not match inputs. Exiting."
+            echo "❌ Queue head does not match inputs. Exiting."
             exit 1
           fi
           echo "✅ Message matches inputs. Proceeding build..."
@@ -72,17 +72,16 @@ jobs:
             echo "next=$NEXT" >> $GITHUB_OUTPUT
           fi
 
-      - name: Trigger next build
+      - name: Trigger next build via API
         if: steps.check.outputs.count != '0'
-        uses: peter-evans/workflow-dispatch@v3
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          workflow: build.yml
-          ref: main
-          inputs: |
-            {
-              "pr_number": "${{ fromJson(steps.check.outputs.next).pr }}",
-              "title": "${{ fromJson(steps.check.outputs.next).title }}",
-              "ref": "${{ fromJson(steps.check.outputs.next).ref }}"
-            }
+        run: |
+          NEXT='${{ steps.check.outputs.next }}'
+          PR=$(echo $NEXT | jq -r .pr)
+          TITLE=$(echo $NEXT | jq -r .title)
+          REF=$(echo $NEXT | jq -r .ref)
+          echo "🚀 Triggering next build for PR #$PR on branch $REF"
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
+            -d "{\"ref\":\"$REF\",\"inputs\":{\"pr_number\":\"$PR\",\"title\":\"$TITLE\",\"ref\":\"$REF\"}}"
