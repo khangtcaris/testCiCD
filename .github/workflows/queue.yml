@@ -23,12 +23,11 @@ jobs:
 
       - name: Ensure queue.json exists
         run: |
-          mkdir -p .github
-          FILE=".github/queue.json"
+          FILE="queue.txt"
           if [ ! -f "$FILE" ]; then
             echo "[]" > "$FILE"
           fi
-          echo "📂 Current queue.json content:"
+          echo "📂 Current queue.txt content:"
           cat "$FILE"
 
       - name: Add PR metadata if not exists
@@ -38,14 +37,11 @@ jobs:
           TITLE="${{ github.event.pull_request.title }}"
           REF="${{ github.head_ref }}"
 
-          EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE")
-          EXISTS=${EXISTS:-0}
+          LINE="{\"pr\":\"$PR_NUM\",\"title\":\"$TITLE\",\"ref\":\"$REF\"}"
 
-          if [ "$EXISTS" -eq 0 ]; then
+          if ! grep -q "\"pr\":\"$PR_NUM\"" "$FILE" 2>/dev/null; then
             echo "✅ Adding PR #$PR_NUM..."
-            jq --arg pr "$PR_NUM" --arg title "$TITLE" --arg ref "$REF" \
-              '. + [{pr: $pr, title: $title, ref: $ref}]' "$FILE" > tmp.json
-            mv tmp.json "$FILE"
+            echo "$LINE" >> "$FILE"
           else
             echo "ℹ️ PR #$PR_NUM already in queue, skipping append"
           fi
@@ -57,7 +53,7 @@ jobs:
 
       - name: Commit queue update
         run: |
-          git add .github/queue.json
+          git add queue.txt
           echo "🔎 Git status before commit:"
           git status
           echo "🔎 Git diff staged changes:"

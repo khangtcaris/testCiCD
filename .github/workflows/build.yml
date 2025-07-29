@@ -21,20 +21,19 @@ jobs:
           ref: queue-store
           token: ${{ secrets.QUEUE_PAT }}
 
-      - name: Get first message from queue
+      - name: Get first message from queue.txt
         id: get
         run: |
-          MSG=$(jq '.[0]' .github/queue.json)
-          echo "msg=$MSG" >> $GITHUB_OUTPUT
-
-      - name: Verify message matches input
-        id: verify
-        run: |
-          MSG='${{ steps.get.outputs.msg }}'
-          if [ "$MSG" = "null" ]; then
+          LINE=$(head -n 1 queue.txt)
+          if [ -z "$LINE" ]; then
             echo "❌ No message found. Exiting."
             exit 1
           fi
+          echo "msg=$LINE" >> $GITHUB_OUTPUT
+
+      - name: Verify message matches input
+        run: |
+          MSG='${{ steps.get.outputs.msg }}'
           PR=$(echo $MSG | jq -r .pr)
           TITLE=$(echo $MSG | jq -r .title)
           REF=$(echo $MSG | jq -r .ref)
@@ -53,22 +52,22 @@ jobs:
           sleep 300
           echo "✅ Build finished"
 
-      - name: Remove processed message
+      - name: Remove processed message (delete first line)
         run: |
-          jq '.[1:]' .github/queue.json > tmp.json && mv tmp.json .github/queue.json
+          sed -i '1d' queue.txt
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
-          git add .github/queue.json
+          git add queue.txt
           git commit -m "Processed PR ${{ github.event.inputs.pr_number }}" || echo "No changes"
           git push origin queue-store
 
       - name: Check if queue still has items
         id: check
         run: |
-          COUNT=$(jq 'length' .github/queue.json)
+          COUNT=$(wc -l < queue.txt)
           echo "count=$COUNT" >> $GITHUB_OUTPUT
           if [ $COUNT -gt 0 ]; then
-            NEXT=$(jq '.[0]' .github/queue.json)
+            NEXT=$(head -n 1 queue.txt)
             echo "next=$NEXT" >> $GITHUB_OUTPUT
           fi
 
