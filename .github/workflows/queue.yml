@@ -34,7 +34,8 @@ jobs:
         run: |
           FILE=".github/queue.json"
           PR_NUM="${{ github.event.pull_request.number }}"
-          EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE")
+          EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE" || echo 0)
+          EXISTS=${EXISTS:-0}
           if [ "$EXISTS" -eq 0 ]; then
             jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"${{ github.event.pull_request.title }}\", \"ref\": \"${{ github.head_ref }}\"}]" "$FILE" > tmp.json && mv tmp.json "$FILE"
             echo "✅ Added PR #$PR_NUM to queue"
