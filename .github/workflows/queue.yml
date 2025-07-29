@@ -28,27 +28,41 @@ jobs:
           if [ ! -f "$FILE" ]; then
             echo "[]" > "$FILE"
           fi
+          echo "📂 Current queue.json content:"
           cat "$FILE"
 
       - name: Add PR metadata if not exists
         run: |
           FILE=".github/queue.json"
           PR_NUM="${{ github.event.pull_request.number }}"
+          TITLE="${{ github.event.pull_request.title }}"
+          REF="${{ github.head_ref }}"
+
+          echo "🔍 Checking if PR #$PR_NUM exists in queue..."
           EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE" || echo 0)
           EXISTS=${EXISTS:-0}
+
           if [ "$EXISTS" -eq 0 ]; then
-            jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"${{ github.event.pull_request.title }}\", \"ref\": \"${{ github.head_ref }}\"}]" "$FILE" > tmp.json && mv tmp.json "$FILE"
-            echo "✅ Added PR #$PR_NUM to queue"
+            echo "✅ Adding PR #$PR_NUM..."
+            TMP=$(mktemp)
+            jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"$TITLE\", \"ref\": \"$REF\"}]" "$FILE" > "$TMP"
+            mv "$TMP" "$FILE"
           else
             echo "ℹ️ PR #$PR_NUM already in queue, skipping append"
           fi
+
+          echo "📂 Updated queue.json content:"
           cat "$FILE"
 
       - name: Commit queue update
         run: |
           git add .github/queue.json
+          echo "🔎 Git status before commit:"
+          git status
+          echo "🔎 Git diff staged changes:"
+          git diff --staged || echo "No diff"
           git commit -m "Queue update for PR #${{ github.event.pull_request.number }}" || echo "No changes"
-          git push origin queue-store
+          git push origin queue-store || echo "No push"
 
       - name: Check if build running
         id: check
