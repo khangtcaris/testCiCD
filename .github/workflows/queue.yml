@@ -1,4 +1,4 @@
-ame: Queue Workflow
+name: Queue Workflow
 
 on:
   pull_request:
