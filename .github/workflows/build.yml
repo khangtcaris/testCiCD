@@ -21,17 +21,35 @@ jobs:
           ref: queue-store
           token: ${{ secrets.QUEUE_PAT }}
 
-      - name: Get first message
+      - name: Get first message from queue
         id: get
         run: |
           MSG=$(jq '.[0]' .github/queue.json)
-          echo "MSG=$MSG" >> $GITHUB_ENV
-          echo "MESSAGE=$MSG" >> $GITHUB_OUTPUT
+          echo "msg=$MSG" >> $GITHUB_OUTPUT
+
+      - name: Verify message matches input
+        id: verify
+        run: |
+          MSG='${{ steps.get.outputs.msg }}'
+          if [ "$MSG" = "null" ]; then
+            echo "No message found. Exiting."
+            exit 1
+          fi
+          PR=$(echo $MSG | jq -r .pr)
+          TITLE=$(echo $MSG | jq -r .title)
+          REF=$(echo $MSG | jq -r .ref)
+          if [ "$PR" != "${{ github.event.inputs.pr_number }}" ] || \
+             [ "$TITLE" != "${{ github.event.inputs.title }}" ] || \
+             [ "$REF" != "${{ github.event.inputs.ref }}" ]; then
+            echo "Queue head does not match inputs. Exiting."
+            exit 1
+          fi
+          echo "✅ Message matches inputs. Proceeding build..."
 
       - name: Simulate Build (5 minutes)
         run: |
+          MSG='${{ steps.get.outputs.msg }}'
           echo "🚀 Building PR $(echo $MSG | jq -r .pr): $(echo $MSG | jq -r .title) on branch $(echo $MSG | jq -r .ref)"
-          echo "⏳ Sleeping for 5 minutes to simulate a long build..."
           sleep 300
           echo "✅ Build finished"
 
@@ -41,17 +59,21 @@ jobs:
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add .github/queue.json
-          git commit -m "Processed PR" || echo "No changes"
+          git commit -m "Processed PR ${{ github.event.inputs.pr_number }}" || echo "No changes"
           git push origin queue-store
 
       - name: Check if queue still has items
         id: check
         run: |
           COUNT=$(jq 'length' .github/queue.json)
-          echo "COUNT=$COUNT" >> $GITHUB_ENV
+          echo "count=$COUNT" >> $GITHUB_OUTPUT
+          if [ $COUNT -gt 0 ]; then
+            NEXT=$(jq '.[0]' .github/queue.json)
+            echo "next=$NEXT" >> $GITHUB_OUTPUT
+          fi
 
       - name: Trigger next build
-        if: env.COUNT != '0'
+        if: steps.check.outputs.count != '0'
         uses: peter-evans/workflow-dispatch@v3
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -60,7 +82,7 @@ jobs:
           ref: main
           inputs: |
             {
-              "pr_number": "${{ fromJson(env.MSG).pr }}",
-              "title": "${{ fromJson(env.MSG).title }}",
-              "ref": "${{ fromJson(env.MSG).ref }}"
+              "pr_number": "${{ fromJson(steps.check.outputs.next).pr }}",
+              "title": "${{ fromJson(steps.check.outputs.next).title }}",
+              "ref": "${{ fromJson(steps.check.outputs.next).ref }}"
             }
