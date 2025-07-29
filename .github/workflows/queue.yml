@@ -64,7 +64,7 @@ jobs:
       - name: Check if build running
         id: check
         run: |
-          RESP=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+          RESP=$(curl -s -H "Authorization: token ${{ secrets.QUEUE_PAT }}" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=in_progress&per_page=1")
           RUNNING=$(echo "$RESP" | jq '.total_count')
           echo "RUNNING=$RUNNING" >> $GITHUB_ENV
@@ -84,7 +84,7 @@ jobs:
             '{ref: $ref, inputs: {pr_number: $pr, title: $title, ref: $ref}}')
           echo "Payload: $PAYLOAD"
           curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Authorization: token ${{ secrets.QUEUE_PAT }}" \
             -H "Accept: application/vnd.github.v3+json" \
             "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches" \
             -d "$PAYLOAD"
