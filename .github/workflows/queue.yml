@@ -1,0 +1,50 @@
+name: Queue Workflow
+
+on:
+  pull_request:
+    branches:
+      - main
+      - develop
+
+jobs:
+  queue-and-trigger:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install jq
+        run: sudo apt-get update && sudo apt-get install -y jq
+
+      - name: Wait until no build is running
+        id: wait_for_slot
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          echo "Checking if any Build Workflow is running..."
+          for i in {1..30}; do
+            RESP=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
+              "https://api.github.com/repos/$REPO/actions/workflows/build.yml/runs?status=in_progress&per_page=1")
+            
+            RUNNING=$(echo "$RESP" | jq '.total_count')
+            echo "Currently running builds: $RUNNING"
+
+            if [ "$RUNNING" -eq 0 ]; then
+              echo "No running builds, safe to proceed."
+              exit 0
+            fi
+
+            echo "Build is still running, waiting 30s (attempt $i)..."
+            sleep 30
+          done
+
+          echo "Timeout waiting for build slot"
+          exit 1
+
+      - name: Trigger Build Workflow
+        uses: peter-evans/workflow-dispatch@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          workflow: build.yml
+          ref: ${{ github.ref }}
+          inputs:
+            pr_number: ${{ github.event.pull_request.number }}
