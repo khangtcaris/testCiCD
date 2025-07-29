@@ -53,5 +53,5 @@ jobs:
           workflow: build.yml
           ref: ${{ github.head_ref }}
           inputs:
-            pr_number: ${{ github.event.pull_request.number }}
-            title: ${{ github.event.pull_request.title }}
+            pr_number: "${{ github.event.pull_request.number }}"
+            title: "${{ github.event.pull_request.title }}"
