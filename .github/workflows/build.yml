@@ -1,0 +1,66 @@
+name: Build Workflow
+run-name: "Build for PR #${{ github.event.inputs.pr_number }} - ${{ github.event.inputs.title }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+      title:
+        required: true
+      ref:
+        required: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout queue branch
+        uses: actions/checkout@v4
+        with:
+          ref: queue-store
+          token: ${{ secrets.QUEUE_PAT }}
+
+      - name: Get first message
+        id: get
+        run: |
+          MSG=$(jq '.[0]' .github/queue.json)
+          echo "MSG=$MSG" >> $GITHUB_ENV
+          echo "MESSAGE=$MSG" >> $GITHUB_OUTPUT
+
+      - name: Simulate Build (5 minutes)
+        run: |
+          echo "🚀 Building PR $(echo $MSG | jq -r .pr): $(echo $MSG | jq -r .title) on branch $(echo $MSG | jq -r .ref)"
+          echo "⏳ Sleeping for 5 minutes to simulate a long build..."
+          sleep 300
+          echo "✅ Build finished"
+
+      - name: Remove processed message
+        run: |
+          jq '.[1:]' .github/queue.json > tmp.json && mv tmp.json .github/queue.json
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add .github/queue.json
+          git commit -m "Processed PR" || echo "No changes"
+          git push origin queue-store
+
+      - name: Check if queue still has items
+        id: check
+        run: |
+          COUNT=$(jq 'length' .github/queue.json)
+          echo "COUNT=$COUNT" >> $GITHUB_ENV
+
+      - name: Trigger next build
+        if: env.COUNT != '0'
+        uses: peter-evans/workflow-dispatch@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          workflow: build.yml
+          ref: main
+          inputs: |
+            {
+              "pr_number": "${{ fromJson(env.MSG).pr }}",
+              "title": "${{ fromJson(env.MSG).title }}",
+              "ref": "${{ fromJson(env.MSG).ref }}"
+            }

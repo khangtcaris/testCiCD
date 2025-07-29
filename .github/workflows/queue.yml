@@ -4,47 +4,52 @@ on:
   pull_request:
     branches:
       - main
-      - develop
+      - dev
 
 jobs:
-  queue-and-trigger:
+  add-to-queue:
     runs-on: ubuntu-latest
     steps:
-      - name: Install jq
-        run: sudo apt-get update && sudo apt-get install -y jq
-
-      - name: Wait until no build is running
-        id: wait_for_slot
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          REPO: ${{ github.repository }}
-        run: |
-          echo "Checking if any Build Workflow is running..."
-          for i in {1..30}; do
-            RESP=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-              "https://api.github.com/repos/$REPO/actions/workflows/build.yml/runs?status=in_progress&per_page=1")
-            
-            RUNNING=$(echo "$RESP" | jq '.total_count')
-            echo "Currently running builds: $RUNNING"
-
-            if [ "$RUNNING" -eq 0 ]; then
-              echo "No running builds, safe to proceed."
-              exit 0
-            fi
-
-            echo "Build is still running, waiting 30s (attempt $i)..."
-            sleep 30
-          done
-
-          echo "Timeout waiting for build slot"
-          exit 1
-
-      - name: Trigger Build Workflow
-        uses: peter-evans/workflow-dispatch@v2
+      - name: Checkout queue branch
+        uses: actions/checkout@v4
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          workflow: build.yml
-          ref: ${{ github.ref }}
-          inputs:
-            pr_number: ${{ github.event.pull_request.number }}
+          ref: queue-store
+          token: ${{ secrets.QUEUE_PAT }}
+
+      - name: Setup Git
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+
+      - name: Add PR metadata to queue.json
+        run: |
+          mkdir -p .github
+          FILE=.github/queue.json
+          [ -f "$FILE" ] || echo "[]" > $FILE
+          jq ". + [{\"pr\": \"${{ github.event.pull_request.number }}\", \"title\": \"${{ github.event.pull_request.title }}\", \"ref\": \"${{ github.head_ref }}\"}]" $FILE > tmp.json && mv tmp.json $FILE
+          cat $FILE
+
+      - name: Commit queue update
+        run: |
+          git add .github/queue.json
+          git commit -m "Add PR #${{ github.event.pull_request.number }} to queue" || echo "No changes"
+          git push origin queue-store
+
+      - name: Check if build running
+        id: check
+        run: |
+          RESP=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/runs?status=in_progress&per_page=1")
+          RUNNING=$(echo "$RESP" | jq '.total_count')
+          echo "RUNNING=$RUNNING" >> $GITHUB_ENV
+          echo "Builds running: $RUNNING"
+
+      - name: Trigger build via API
+        if: env.RUNNING == '0'
+        run: |
+          MSG=$(jq '.[0]' .github/queue.json)
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches \
+            -d "{\"ref\":\"$(echo $MSG | jq -r .ref)\",\"inputs\":{\"pr_number\":\"$(echo $MSG | jq -r .pr)\",\"title\":\"$(echo $MSG | jq -r .title)\"}}"
