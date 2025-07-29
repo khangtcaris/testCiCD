@@ -38,21 +38,26 @@ jobs:
           TITLE="${{ github.event.pull_request.title }}"
           REF="${{ github.head_ref }}"
 
-          echo "🔍 Checking if PR #$PR_NUM exists in queue..."
-          EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE" || echo 0)
+          echo "📂 Content BEFORE update:"
+          cat "$FILE" 2>/dev/null || echo "File does not exist yet"
+
+          mkdir -p "$(dirname "$FILE")"
+          EXISTS=$(jq --arg pr "$PR_NUM" 'map(select(.pr == $pr)) | length' "$FILE" 2>/dev/null || echo 0)
           EXISTS=${EXISTS:-0}
 
           if [ "$EXISTS" -eq 0 ]; then
             echo "✅ Adding PR #$PR_NUM..."
             TMP=$(mktemp)
-            jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"$TITLE\", \"ref\": \"$REF\"}]" "$FILE" > "$TMP"
+            jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"$TITLE\", \"ref\": \"$REF\"}]" "$FILE" > "$TMP" 2>/dev/null || echo "[]" > "$TMP" && jq ". + [{\"pr\": \"$PR_NUM\", \"title\": \"$TITLE\", \"ref\": \"$REF\"}]" "$TMP" > "$TMP"
             mv "$TMP" "$FILE"
           else
             echo "ℹ️ PR #$PR_NUM already in queue, skipping append"
           fi
 
-          echo "📂 Updated queue.json content:"
-          cat "$FILE"
+          echo "📂 Content AFTER update:"
+          cat "$FILE" 2>/dev/null || echo "Failed to read file"
+          echo "📏 File checksum AFTER update:"
+          sha256sum "$FILE" 2>/dev/null || echo "Failed to compute checksum"
 
       - name: Commit queue update
         run: |
