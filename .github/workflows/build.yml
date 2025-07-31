@@ -17,8 +17,8 @@ jobs:
     steps:
       - name: Delay start to batch incoming PRs
         run: |
-          echo "😴 Waiting 5 minutes so you can create multiple PRs..."
-          sleep 300
+          echo "😴 Waiting 1 minute so you can create multiple PRs..."
+          sleep 60
 
       - name: Checkout queue branch
         uses: actions/checkout@v4
@@ -36,6 +36,20 @@ jobs:
           fi
           echo "msg=$LINE" >> $GITHUB_OUTPUT
 
+      - name: Get PR SHA for check run
+        id: pr-sha
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prNumber = parseInt('${{ github.event.inputs.pr_number }}')
+            const { data: pr } = await github.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber
+            })
+            core.setOutput("sha", pr.head.sha)
+
       - name: Verify message matches input
         run: |
           MSG='${{ steps.get.outputs.msg }}'
@@ -51,11 +65,42 @@ jobs:
           echo "✅ Message matches inputs. Proceeding build..."
 
       - name: Simulate Build (5 minutes)
+        id: run-build
         run: |
           MSG='${{ steps.get.outputs.msg }}'
           echo "🚀 Building PR $(echo $MSG | jq -r .pr): $(echo $MSG | jq -r .title) on branch $(echo $MSG | jq -r .ref)"
-          sleep 300
+          sleep 60
           echo "✅ Build finished"
+          echo "report=Build succeeded at $(date)" >> $GITHUB_OUTPUT
+
+      # 📤 Upload a report artifact
+      - name: Upload build report
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-report
+          path: ./build.log
+        continue-on-error: true
+
+      # ✅ Update PR check run with result
+      - name: Update PR Check Status
+        if: always()
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const outcome = "${{ job.status }}" === "success" ? "success" : "failure"
+            await github.rest.checks.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              name: 'Build Workflow',
+              head_sha: "${{ steps.pr-sha.outputs.sha }}",
+              status: 'completed',
+              conclusion: outcome,
+              output: {
+                title: outcome === 'success' ? 'Build Succeeded' : 'Build Failed',
+                summary: 'See attached artifact for details.'
+              }
+            })
 
       - name: Remove processed message (delete first line)
         run: |

@@ -1,0 +1,205 @@
+name: Build Workflow
+run-name: "Build for PR #${{ github.event.inputs.pr_number }} - ${{ github.event.inputs.title }}"
+
+on:
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        required: true
+      title:
+        required: true
+      ref:
+        required: true
+      actor:
+        required: true
+
+env:
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  AWS_DEFAULT_REGION: ${{ secrets.AWS_REGION }}
+  EC2_NAME: "EC2-Build"
+
+jobs:
+  check_sqs_message:
+    name: Verify SQS message for this run
+    runs-on: ubuntu-latest
+    outputs:
+      valid_message: ${{ steps.validate.outputs.valid_message }}
+    steps:
+      - name: Get first message from SQS
+        id: get
+        run: |
+          MESSAGE=$(aws sqs receive-message \
+            --queue-url ${{ secrets.SQS_PR_URL }} \
+            --max-number-of-messages 1 \
+            --wait-time-seconds 5 \
+            --query 'Messages[0]' \
+            --output json)
+
+          if [ "$MESSAGE" = "null" ] || [ -z "$MESSAGE" ]; then
+            echo "No message found in queue."
+            exit 1
+          fi
+
+          echo "$MESSAGE" > message.json
+          BODY=$(jq -r .Body message.json)
+          RECEIPT_HANDLE=$(jq -r .ReceiptHandle message.json)
+
+          echo "BODY=$BODY" >> $GITHUB_ENV
+          echo "RECEIPT_HANDLE=$RECEIPT_HANDLE" >> $GITHUB_ENV
+
+      - name: Validate message matches inputs
+        id: validate
+        run: |
+          PR=$(echo $BODY | jq -r .pr)
+          TITLE=$(echo $BODY | jq -r .title)
+          REF=$(echo $BODY | jq -r .ref)
+
+          if [ "$PR" = "${{ github.event.inputs.pr_number }}" ] && \
+             [ "$TITLE" = "${{ github.event.inputs.title }}" ] && \
+             [ "$REF" = "${{ github.event.inputs.ref }}" ]; then
+            echo "Message matches inputs."
+            echo "valid_message=true" >> $GITHUB_OUTPUT
+          else
+            echo "Message does not match inputs."
+            echo "valid_message=false" >> $GITHUB_OUTPUT
+
+  start_ec2:
+    name: Start self-hosted EC2 runner
+    needs: check_sqs_message
+    if: needs.check_sqs_message.outputs.valid_message == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check EC2 status
+        id: ec2_build_status
+        run: |
+          EC2_STATE=$(aws ec2 describe-instances \
+            --instance-ids ${{ secrets.AWS_EC2_BUILD_INSTANCE_ID }} \
+            --query 'Reservations[*].Instances[*].State.Name' \
+            --output text)
+          echo "ec2_state=$EC2_STATE" >> $GITHUB_OUTPUT
+      - name: Start AWS EC2
+        if: steps.ec2_build_status.outputs.ec2_state != 'running'
+        run: aws ec2 start-instances --instance-ids ${{ secrets.AWS_EC2_BUILD_INSTANCE_ID }}
+      - name: Wait for running state
+        if: steps.ec2_build_status.outputs.ec2_state != 'running'
+        run: aws ec2 wait instance-running --instance-ids ${{ secrets.AWS_EC2_BUILD_INSTANCE_ID }}
+
+  checkout_revision:
+    name: Checkout revision on EC2 runner
+    needs: start_ec2
+    if: needs.check_sqs_message.outputs.valid_message == 'true'
+    runs-on: [self-hosted, build-only]
+    steps:
+      - name: Checkout code on self-hosted runner
+        run: |
+          rm -rf /home/ubuntu/nxgs-platform/
+          mkdir -p /home/ubuntu/nxgs-platform/
+          cd /home/ubuntu/nxgs-platform/
+          git clone --recursive https://${{secrets.GIT_TOKEN}}@github.com/accretech-bggs-extension/nxgs-platform.git .
+          git fetch --all
+          git checkout ${{ github.event.inputs.ref }}
+          git submodule update --init --recursive
+
+  build:
+    name: Build source code
+    runs-on: [self-hosted, build-only]
+    needs: checkout_revision
+    if: needs.check_sqs_message.outputs.valid_message == 'true'
+    timeout-minutes: 120
+    steps:
+      - name: Build source code
+        run: |
+          cd /home/ubuntu/nxgs-platform/
+          #chmod +x ./auto-build-all.sh
+          #./auto-build-all.sh
+
+  notify_success:
+    name: Notify slack success
+    needs: build
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          payload=$(jq -n \
+            --arg revision "${{ github.sha }}" \
+            --arg pr "${{ github.event.inputs.pr_number }}" \
+            --arg title "${{ github.event.inputs.title }}" \
+            --arg ref "${{ github.event.inputs.ref }}" \
+            '{status:true, pr:$pr, title:$title, ref:$ref, revision:$revision}')
+          aws lambda invoke \
+            --function-name ${{ secrets.NOTIFICATION_LAMBDA_NAME }} \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$payload" \
+            response.json
+
+  notify_failed:
+    name: Notify slack failed
+    needs: build
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          payload=$(jq -n \
+            --arg revision "${{ github.sha }}" \
+            --arg pr "${{ github.event.inputs.pr_number }}" \
+            --arg title "${{ github.event.inputs.title }}" \
+            --arg ref "${{ github.event.inputs.ref }}" \
+            '{status:false, pr:$pr, title:$title, ref:$ref, revision:$revision}')
+          aws lambda invoke \
+            --function-name ${{ secrets.NOTIFICATION_LAMBDA_NAME }} \
+            --cli-binary-format raw-in-base64-out \
+            --payload "$payload" \
+            response.json
+
+  finalize_queue:
+    name: Finalize queue (cleanup & next build)
+    needs: [check_sqs_message, build, notify_success, notify_failed]
+    runs-on: ubuntu-latest
+    if: always()
+    steps:
+      - name: Handle queue message
+        run: |
+          NEXT=$(aws sqs get-queue-attributes \
+            --queue-url ${{ secrets.SQS_PR_URL }} \
+            --attribute-names ApproximateNumberOfMessages \
+            --query 'Attributes.ApproximateNumberOfMessages' \
+            --output text)
+
+          if [ "${{ needs.check_sqs_message.outputs.valid_message }}" == "true" ]; then
+            if [ -n "${{ env.RECEIPT_HANDLE }}" ]; then
+              aws sqs delete-message \
+                --queue-url ${{ secrets.SQS_PR_URL }} \
+                --receipt-handle "${{ env.RECEIPT_HANDLE }}"
+              echo "Deleted current message from SQS"
+            fi
+          else
+            echo "Message did not match this build. Skipping delete."
+          fi
+
+          if [ "$NEXT" != "0" ]; then
+            MSG=$(aws sqs receive-message \
+              --queue-url ${{ secrets.SQS_PR_URL }} \
+              --max-number-of-messages 1 \
+              --visibility-timeout 0 \
+              --wait-time-seconds 5 \
+              --query 'Messages[0].Body' \
+              --output text)
+
+            if [ -n "$MSG" ]; then
+              PR=$(echo $MSG | jq -r .pr)
+              TITLE=$(echo $MSG | jq -r .title)
+              REF=$(echo $MSG | jq -r .ref)
+              echo "Triggering build for PR #$PR ($TITLE) on $REF"
+              curl -X POST \
+                -H "Authorization: token ${{ secrets.QUEUE_PAT }}" \
+                -H "Accept: application/vnd.github.v3+json" \
+                "https://api.github.com/repos/${{ github.repository }}/actions/workflows/build.yml/dispatches" \
+                -d "{\"ref\":\"$REF\",\"inputs\":{\"pr_number\":\"$PR\",\"title\":\"$TITLE\",\"ref\":\"$REF\"}}"
+            fi
+          else
+            echo "Queue empty → stopping EC2..."
+            aws ec2 stop-instances --instance-ids ${{ secrets.AWS_EC2_BUILD_INSTANCE_ID }}
+            aws ec2 wait instance-stopped --instance-ids ${{ secrets.AWS_EC2_BUILD_INSTANCE_ID }}
+            echo "EC2 build instance stopped."
