@@ -60,23 +60,27 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
             const pr = context.payload.pull_request
-            const { data: fullPR } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: pr.number
-            })
-            const check = await github.rest.checks.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              name: 'Queue Status',
-              head_sha: fullPR.head.sha,
-              status: 'in_progress',
-              output: {
-                title: 'Queued for Build',
-                summary: 'This PR is in the build queue and will run shortly.'
-              }
-            })
-            core.setOutput('check_id', check.data.id)
+            if (!pr) {
+              core.setFailed("No pull_request found in context.payload")
+            } else {
+              const { data: fullPR } = await github.rest.pulls.get({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number
+              })
+              const check = await github.rest.checks.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                name: 'Queue Status',
+                head_sha: fullPR.head.sha,
+                status: 'in_progress',
+                output: {
+                  title: 'Queued for Build',
+                  summary: `PR #${pr.number} is in the build queue and will run shortly.`
+                }
+              })
+              core.setOutput('check_id', check.data.id)
+            }
 
       - name: Check if build running
         id: check
